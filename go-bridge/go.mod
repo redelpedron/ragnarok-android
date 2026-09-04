@@ -1,12 +1,16 @@
 module github.com/kivutar/goro-android-port
 
-go 1.25
+go 1.23
 
 require (
-	github.com/gogpu/gogpu v0.0.0
 	github.com/kivutar/goro v0.0.0
+	golang.org/x/mobile v0.0.0-20240806205939-81131f6468ab
 )
 
-// Replace with local paths during development
-// replace github.com/gogpu/gogpu => ../gogpu
-// replace github.com/kivutar/goro => ../goro
+replace github.com/kivutar/goro => ../goro
+
+// Pin gpucontext to a version compatible with the gg canvas integration.
+// The ggcanvas error happens when gg and gpucontext drift out of sync.
+require (
+	github.com/gogpu/gpucontext v0.0.0-20240801000000-000000000000
+)

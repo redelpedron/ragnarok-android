@@ -3,8 +3,6 @@ name: Build Android APK
 on:
   push:
     branches: [main, master]
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
     inputs:
       release:
@@ -13,159 +11,57 @@ on:
         default: 'false'
         type: boolean
 
-env:
-  GO_VERSION: '1.23'
-  NDK_VERSION: 'r27c'
-  ANDROID_API_LEVEL: '28'
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # ------------------------------------------------------------------
-      # 1. Checkout this scaffold repo
-      # ------------------------------------------------------------------
-      - name: Checkout scaffold
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------
-      # 2. Setup Go
-      # ------------------------------------------------------------------
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: '1.23'
 
-      # ------------------------------------------------------------------
-      # 3. Setup Android NDK (official action — no manual wget)
-      # ------------------------------------------------------------------
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
-          link-to-sdk: true
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH=$PATH:$(go env GOPATH)/bin
+          gomobile init
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 12266719
-          packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
-
-      # ------------------------------------------------------------------
-      # 4. Clone upstream dependencies
-      # ------------------------------------------------------------------
-      - name: Clone goro & gogpu
+      - name: Clone upstream goro
         run: |
           git clone --depth 1 https://github.com/kivutar/goro.git ${{ runner.temp }}/goro
-          git clone --depth 1 https://github.com/gogpu/gogpu.git ${{ runner.temp }}/gogpu
 
-      # ------------------------------------------------------------------
-      # 5. Apply Android patches automatically
-      # ------------------------------------------------------------------
-      - name: Apply patches
-        run: |
-          cd ${{ runner.temp }}/gogpu
-          git apply $GITHUB_WORKSPACE/patches/0001-gogpu-android-surface.patch || echo "Patch 1 may already be applied"
-          cd ${{ runner.temp }}/goro
-          git apply $GITHUB_WORKSPACE/patches/0002-goro-android-assets.patch || echo "Patch 2 may already be applied"
-
-      # ------------------------------------------------------------------
-      # 6. Configure go.mod with local replacements
-      # ------------------------------------------------------------------
       - name: Setup go.mod
         run: |
           cd $GITHUB_WORKSPACE/go-bridge
-          go mod edit -replace github.com/gogpu/gogpu=${{ runner.temp }}/gogpu
           go mod edit -replace github.com/kivutar/goro=${{ runner.temp }}/goro
           go mod tidy
 
-      # ------------------------------------------------------------------
-      # 7. Build libgoro.so
-      # ------------------------------------------------------------------
-      - name: Build Go shared library
+      - name: Build APK with gomobile
         run: |
-          export CGO_ENABLED=1
-          export GOOS=android
-          export GOARCH=arm64
-          export CC="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++"
-          export SYSROOT="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          export CGO_CFLAGS="-I$SYSROOT/usr/include"
-          export CGO_LDFLAGS="-L$SYSROOT/usr/lib -landroid -llog"
-
-          mkdir -p $GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a
+          export PATH=$PATH:$(go env GOPATH)/bin
           cd $GITHUB_WORKSPACE/go-bridge
-          go build -o $GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a/libgoro.so             -buildmode=c-shared -trimpath             -ldflags="-s -w"             ./main_android.go
+          # gomobile handles manifest, activity, and APK packaging
+          gomobile build -target=android/arm64 -o $GITHUB_WORKSPACE/goro.apk .
 
-          file $GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a/libgoro.so
-
-      # ------------------------------------------------------------------
-      # 8. Generate Gradle wrapper and build APK
-      # ------------------------------------------------------------------
-      - name: Setup Gradle wrapper
-        run: |
-          cd $GITHUB_WORKSPACE/android
-          if [ ! -f gradlew ]; then
-            # Use the Gradle wrapper task to bootstrap
-            mkdir -p gradle/wrapper
-            cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-bin.zip
-          networkTimeout=10000
-          validateDistributionUrl=true
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-            curl -L -o gradle/wrapper/gradle-wrapper.jar               https://raw.githubusercontent.com/gradle/gradle/v8.9.0/gradle/wrapper/gradle-wrapper.jar
-            cat > gradlew << 'EOF'
-          #!/bin/sh
-          exec "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" "$@"
-          EOF
-            chmod +x gradlew
-          fi
-
-      - name: Build APK
-        run: |
-          cd $GITHUB_WORKSPACE/android
-          ./gradlew assembleDebug --no-daemon --stacktrace
-
-      # ------------------------------------------------------------------
-      # 9. Upload APK as artifact
-      # ------------------------------------------------------------------
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: goro-android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: goro-android
+          path: goro.apk
           retention-days: 90
 
-      # ------------------------------------------------------------------
-      # 10. Create GitHub Release (manual trigger only)
-      # ------------------------------------------------------------------
-      - name: Sign APK (debug keystore)
-        if: github.event.inputs.release == 'true'
-        run: |
-          keytool -genkey -v             -keystore $GITHUB_WORKSPACE/debug.keystore             -alias goro             -keyalg RSA -keysize 2048 -validity 10000             -storepass android -keypass android             -dname "CN=Goro Android"
-
-          export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
-          zipalign -v 4             $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk             $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug-aligned.apk
-          apksigner sign             --ks $GITHUB_WORKSPACE/debug.keystore             --ks-pass pass:android             --key-pass pass:android             $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug-aligned.apk
-          mv $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug-aligned.apk              $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/goro-android.apk
-
-      - name: Create Release
+      - name: Release
         if: github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/debug/goro-android.apk
+          files: goro.apk
           tag_name: v${{ github.run_number }}
           name: Goro Android v${{ github.run_number }}
           body: |
-            Automated build from mobile CI.
-
-            **Note:** You must provide your own `data.grf` (RO client assets).
-            Place them in `/sdcard/Android/data/com.goro.android/files/` or use
-            the in-app file picker on first launch.
+            Gomobile build. Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
