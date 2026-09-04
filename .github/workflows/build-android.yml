@@ -11,6 +11,10 @@ on:
         default: 'false'
         type: boolean
 
+# THIS IS THE FIX — give the job permission to write releases
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -75,9 +79,6 @@ jobs:
           path: goro.apk
           retention-days: 90
 
-      # ------------------------------------------------------------------
-      # Auto pre-release on every push (mobile-friendly: always available)
-      # ------------------------------------------------------------------
       - name: Auto pre-release on push
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
@@ -97,9 +98,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ------------------------------------------------------------------
-      # Stable release on manual trigger only
-      # ------------------------------------------------------------------
       - name: Stable release
         if: github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v2
