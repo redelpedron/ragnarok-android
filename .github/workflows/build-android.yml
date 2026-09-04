@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Create GitHub Release?'
+        description: 'Create stable GitHub Release?'
         required: false
         default: 'false'
         type: boolean
@@ -38,11 +38,8 @@ jobs:
 
       - name: Remove conflicting pre-installed NDK
         run: |
-          # Gomobile scans ANDROID_HOME/ndk and finds the broken pre-installed NDK
-          # (API 16, unusable). Delete it so gomobile only sees our NDK.
           rm -rf /usr/local/lib/android/sdk/ndk/27.3.13750724 || true
           rm -rf /usr/local/lib/android/sdk/ndk-bundle || true
-          ls -la /usr/local/lib/android/sdk/ndk/ || echo "NDK dir cleared"
 
       - name: Install gomobile
         env:
@@ -71,21 +68,47 @@ jobs:
           cd $GITHUB_WORKSPACE/go-bridge
           gomobile build -target=android/arm64 -o $GITHUB_WORKSPACE/goro.apk .
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: goro-android
           path: goro.apk
           retention-days: 90
 
-      - name: Release
+      # ------------------------------------------------------------------
+      # Auto pre-release on every push (mobile-friendly: always available)
+      # ------------------------------------------------------------------
+      - name: Auto pre-release on push
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: goro.apk
+          tag_name: auto-${{ github.run_number }}
+          name: Auto Build ${{ github.run_number }}
+          prerelease: true
+          body: |
+            Automatic build from push to `${{ github.ref_name }}`.
+            
+            **Download `goro.apk` below and install on your phone.**
+            
+            **Note:** You must provide your own `data.grf` (RO client assets).
+            Place them in `/sdcard/Android/data/com.goro.android/files/` or use
+            the in-app file picker on first launch.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # Stable release on manual trigger only
+      # ------------------------------------------------------------------
+      - name: Stable release
         if: github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: goro.apk
           tag_name: v${{ github.run_number }}
           name: Goro Android v${{ github.run_number }}
+          prerelease: false
           body: |
-            Gomobile build. Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
+            Stable release. Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
