@@ -69,19 +69,62 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           cd $GITHUB_WORKSPACE/go-bridge
-          gomobile build -androidapi 34 -target=android/arm64 -o $GITHUB_WORKSPACE/goro.apk .
+          gomobile build -androidapi 34 -target=android/arm64 -o $GITHUB_WORKSPACE/goro-raw.apk .
 
-      - name: Verify APK
+      - name: Fix APK manifest and re-sign with v2/v3
         run: |
           export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
+          
+          # Install apktool to decompile/recompile the manifest
+          wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O apktool.jar
+          
+          # Decompile gomobile's APK
+          java -jar apktool.jar d $GITHUB_WORKSPACE/goro-raw.apk -o $GITHUB_WORKSPACE/goro_decompiled -f
+          
+          # Fix the manifest: force minSdk and targetSdk to 34
+          sed -i 's/android:minSdkVersion="[^"]*"/android:minSdkVersion="34"/g' $GITHUB_WORKSPACE/goro_decompiled/AndroidManifest.xml
+          
+          # Add targetSdkVersion if missing
+          if ! grep -q 'android:targetSdkVersion' $GITHUB_WORKSPACE/goro_decompiled/AndroidManifest.xml; then
+            sed -i 's/<uses-sdk /<uses-sdk android:targetSdkVersion="34" /g' $GITHUB_WORKSPACE/goro_decompiled/AndroidManifest.xml
+          else
+            sed -i 's/android:targetSdkVersion="[^"]*"/android:targetSdkVersion="34"/g' $GITHUB_WORKSPACE/goro_decompiled/AndroidManifest.xml
+          fi
+          
+          # Also fix package name from org.golang.todo.* to something cleaner
+          sed -i 's/package="org.golang.todo.goro_android_port"/package="com.goro.android"/g' $GITHUB_WORKSPACE/goro_decompiled/AndroidManifest.xml
+          
+          # Recompile
+          java -jar apktool.jar b $GITHUB_WORKSPACE/goro_decompiled -o $GITHUB_WORKSPACE/goro_rebuilt.apk
+          
+          # Align
+          zipalign -v 4 $GITHUB_WORKSPACE/goro_rebuilt.apk $GITHUB_WORKSPACE/goro_aligned.apk
+          
+          # Generate consistent debug keystore
+          keytool -genkey -v \
+            -keystore $GITHUB_WORKSPACE/debug.keystore \
+            -alias goro \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Goro Android" 2>/dev/null || true
+          
+          # Sign with v2 + v3 (required for Android 11+)
+          apksigner sign \
+            --ks $GITHUB_WORKSPACE/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out $GITHUB_WORKSPACE/goro.apk \
+            $GITHUB_WORKSPACE/goro_aligned.apk
+          
+          # Verify
+          echo "=== APK Verification ==="
+          apksigner verify -v $GITHUB_WORKSPACE/goro.apk
+          echo ""
           echo "=== APK Info ==="
-          aapt dump badging $GITHUB_WORKSPACE/goro.apk | head -10
-          echo ""
-          echo "=== Native libraries ==="
-          aapt list $GITHUB_WORKSPACE/goro.apk | grep lib/
-          echo ""
-          echo "=== Signature ==="
-          apksigner verify -v $GITHUB_WORKSPACE/goro.apk || true
+          aapt dump badging $GITHUB_WORKSPACE/goro.apk | head -15
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
