@@ -11,7 +11,6 @@ on:
         default: 'false'
         type: boolean
 
-# THIS IS THE FIX — give the job permission to write releases
 permissions:
   contents: write
 
@@ -64,13 +63,58 @@ jobs:
           go mod edit -replace github.com/kivutar/goro=${{ runner.temp }}/goro
           go mod tidy
 
-      - name: Build APK with gomobile
+      # ------------------------------------------------------------------
+      # Generate a consistent debug keystore (cached so signatures match)
+      # ------------------------------------------------------------------
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        id: keystore-cache
+        with:
+          path: ${{ github.workspace }}/debug.keystore
+          key: goro-debug-keystore-v1
+
+      - name: Generate debug keystore
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
+        run: |
+          keytool -genkey -v \
+            -keystore ${{ github.workspace }}/debug.keystore \
+            -alias goro \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Goro Android"
+
+      - name: Build APK (all architectures)
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           cd $GITHUB_WORKSPACE/go-bridge
-          gomobile build -target=android/arm64 -o $GITHUB_WORKSPACE/goro.apk .
+          # "android" target builds arm64, armv7, and x86 in one APK
+          gomobile build -target=android -o $GITHUB_WORKSPACE/goro-unsigned.apk .
+
+      - name: Sign and align APK
+        run: |
+          export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
+          
+          # Zipalign
+          zipalign -v 4 \
+            $GITHUB_WORKSPACE/goro-unsigned.apk \
+            $GITHUB_WORKSPACE/goro-aligned.apk
+          
+          # Sign with consistent debug key
+          apksigner sign \
+            --ks ${{ github.workspace }}/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            $GITHUB_WORKSPACE/goro-aligned.apk
+          
+          # Verify
+          apksigner verify -v $GITHUB_WORKSPACE/goro-aligned.apk
+          aapt dump badging $GITHUB_WORKSPACE/goro-aligned.apk | head -5
+          
+          mv $GITHUB_WORKSPACE/goro-aligned.apk $GITHUB_WORKSPACE/goro.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -92,6 +136,8 @@ jobs:
             
             **Download `goro.apk` below and install on your phone.**
             
+            **If install fails:** Uninstall any old version first (signature conflict).
+            
             **Note:** You must provide your own `data.grf` (RO client assets).
             Place them in `/sdcard/Android/data/com.goro.android/files/` or use
             the in-app file picker on first launch.
@@ -107,6 +153,7 @@ jobs:
           name: Goro Android v${{ github.run_number }}
           prerelease: false
           body: |
-            Stable release. Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
+            Stable release. Uninstall old version before installing.
+            Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
