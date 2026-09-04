@@ -30,7 +30,7 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           cmdline-tools-version: 12266719
-          packages: 'platforms;android-34 build-tools;35.0.0 platform-tools'
+          packages: 'platforms;android-28 build-tools;35.0.0 platform-tools'
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -69,7 +69,8 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           cd $GITHUB_WORKSPACE/go-bridge
-          gomobile build -androidapi 34 -target=android/arm64 -o $GITHUB_WORKSPACE/goro-raw.apk .
+          # Downgraded to api 28 as requested — still compatible with Android 15+
+          gomobile build -androidapi 28 -target=android/arm64 -o $GITHUB_WORKSPACE/goro-raw.apk .
 
       - name: Patch manifest with apktool and re-sign
         run: |
@@ -81,6 +82,12 @@ jobs:
           
           echo "=== Decompiling ==="
           java -jar apktool.jar d "$GITHUB_WORKSPACE/goro-raw.apk" -o "$GITHUB_WORKSPACE/goro_decompiled" -f
+          
+          echo "=== Deleting old signatures ==="
+          # CRITICAL: apktool preserves original META-INF in the 'original/' folder.
+          # If we don't delete it, apksigner sees existing JAR signatures and skips v1/v2.
+          rm -rf "$GITHUB_WORKSPACE/goro_decompiled/original"
+          ls -la "$GITHUB_WORKSPACE/goro_decompiled/"
           
           echo "=== Patching manifest ==="
           python3 << 'PYEOF'
@@ -98,18 +105,20 @@ jobs:
           if uses_sdk is None:
               uses_sdk = ET.SubElement(root, 'uses-sdk')
 
-          uses_sdk.set(NS + 'minSdkVersion', '28')
-          uses_sdk.set(NS + 'targetSdkVersion', '34')
+          # Android 15+ requires targetSdk >= 24. Using 28 for compatibility.
+          uses_sdk.set(NS + 'minSdkVersion', '24')
+          uses_sdk.set(NS + 'targetSdkVersion', '28')
 
           tree.write(manifest_path, xml_declaration=True, encoding='utf-8')
-          print("Patched: minSdk=28, targetSdk=34")
+          print("Patched: minSdk=24, targetSdk=28")
           PYEOF
           
           echo "=== Recompiling ==="
           java -jar apktool.jar b --use-aapt2 "$GITHUB_WORKSPACE/goro_decompiled" -o "$GITHUB_WORKSPACE/goro_rebuilt.apk"
           
-          echo "=== Aligning ==="
-          zipalign -f -p 4 "$GITHUB_WORKSPACE/goro_rebuilt.apk" "$GITHUB_WORKSPACE/goro_aligned.apk"
+          echo "=== Aligning (4-byte for v2 signing) ==="
+          # Use standard 4-byte alignment, NOT page alignment (-p), for v2 compatibility
+          zipalign -f 4 "$GITHUB_WORKSPACE/goro_rebuilt.apk" "$GITHUB_WORKSPACE/goro_aligned.apk"
           
           echo "=== Generating keystore ==="
           keytool -genkeypair \
@@ -123,7 +132,8 @@ jobs:
             -dname "CN=Goro Android" \
             -storetype PKCS12
           
-          echo "=== Signing ==="
+          echo "=== Signing (v1 + v2 + v3) ==="
+          # --min-sdk-version 24 forces apksigner to include v2 block
           apksigner sign \
             --ks "$GITHUB_WORKSPACE/debug.keystore" \
             --ks-pass pass:android \
@@ -131,17 +141,12 @@ jobs:
             --v1-signing-enabled true \
             --v2-signing-enabled true \
             --v3-signing-enabled true \
+            --min-sdk-version 24 \
             --out "$GITHUB_WORKSPACE/goro.apk" \
             "$GITHUB_WORKSPACE/goro_aligned.apk"
           
           echo "=== Verifying ==="
-          apksigner verify --verbose --print-certs "$GITHUB_WORKSPACE/goro.apk" | tee verification.txt
-          
-          echo "=== Checking APK is valid ==="
-          if ! head -1 verification.txt | grep -q "Verifies"; then
-            echo "::error::APK signature verification failed"
-            exit 1
-          fi
+          apksigner verify --verbose --print-certs "$GITHUB_WORKSPACE/goro.apk"
           
           echo "=== Final manifest ==="
           aapt dump badging "$GITHUB_WORKSPACE/goro.apk" | head -10
