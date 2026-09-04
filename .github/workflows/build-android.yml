@@ -71,14 +71,17 @@ jobs:
           cd $GITHUB_WORKSPACE/go-bridge
           gomobile build -androidapi 34 -target=android/arm64 -o $GITHUB_WORKSPACE/goro-raw.apk .
 
-      - name: Inspect raw APK manifest
+      - name: Verify target SDK is installable on modern Android
         run: |
           export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
-          echo "=== RAW APK MANIFEST ==="
-          aapt dump badging $GITHUB_WORKSPACE/goro-raw.apk
-          echo ""
-          echo "=== RAW APK SIGNATURE ==="
-          apksigner verify -v $GITHUB_WORKSPACE/goro-raw.apk 2>&1 || true
+          BADGING=$(aapt dump badging "$GITHUB_WORKSPACE/goro-raw.apk")
+          echo "$BADGING"
+          TARGET_SDK=$(echo "$BADGING" | grep -oP "targetSdkVersion:'\\K[0-9]+" || true)
+          if [ -z "$TARGET_SDK" ] || [ "$TARGET_SDK" -lt 24 ]; then
+            echo "::error::targetSdkVersion is '$TARGET_SDK' — Android 15+ refuses to install anything below 24."
+            exit 1
+          fi
+          echo "✅ targetSdkVersion=$TARGET_SDK — acceptable for modern Android."
 
       - name: Cache debug keystore
         uses: actions/cache@v4
@@ -130,36 +133,34 @@ jobs:
           grep "Verified using v2 scheme (APK Signature Scheme v2): true" verification.txt
           grep "Verified using v3 scheme (APK Signature Scheme v3): true" verification.txt
 
-          echo "=== Final APK Info ==="
-          aapt dump badging "$GITHUB_WORKSPACE/goro.apk" | head -15
-
-          echo "=== APK SIZE ==="
-          ls -lh "$GITHUB_WORKSPACE/goro.apk"
+      - name: Rename APK with build number
+        run: |
+          cp "$GITHUB_WORKSPACE/goro.apk" "$GITHUB_WORKSPACE/goro-build${{ github.run_number }}.apk"
+          ls -lh "$GITHUB_WORKSPACE/goro-build${{ github.run_number }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: goro-android
-          path: goro.apk
+          name: goro-android-build${{ github.run_number }}
+          path: goro-build${{ github.run_number }}.apk
           retention-days: 90
 
       - name: Auto pre-release on push
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          files: goro.apk
+          files: goro-build${{ github.run_number }}.apk
           tag_name: auto-${{ github.run_number }}
           name: Auto Build ${{ github.run_number }}
           prerelease: true
           body: |
-            Automatic build for Pixel 6 / Android 15+.
+            Automatic build #${{ github.run_number }} for Pixel 6 / Android 15+.
             
-            **To install:** Download `goro.apk` below.
-            - **Uninstall any old version first** (Settings → Apps → Goro → Uninstall)
-            - Then tap the APK to install
-            
-            If install still fails, the APK manifest and signature were verified in CI.
-            Check the build logs for `=== Final APK Info ===` to confirm.
+            **To install:**
+            1. **Delete ALL old `goro*.apk` files** from your Downloads folder first
+            2. Download `goro-build${{ github.run_number }}.apk` below
+            3. If you have an old version installed: **Uninstall it first** (Settings → Apps → Goro → Uninstall)
+            4. Tap the APK to install
             
             **Note:** Provide your own `data.grf`. Place in `/sdcard/Android/data/com.goro.android/files/`.
         env:
@@ -169,12 +170,15 @@ jobs:
         if: github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: goro.apk
+          files: goro-build${{ github.run_number }}.apk
           tag_name: v${{ github.run_number }}
           name: Goro Android v${{ github.run_number }}
           prerelease: false
           body: |
-            Stable release. Uninstall old version before installing.
+            Stable release #${{ github.run_number }}.
+            
+            **Delete old APKs from Downloads before installing.**
+            Uninstall old version before installing.
             Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
