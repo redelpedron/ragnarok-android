@@ -51,7 +51,7 @@ func onStart() {
 	// confirms the file can be opened - it doesn't load it into the engine
 	// yet. Look for "Goro: data.grf" in logcat after each run.
 	if f, err := dataLoader.Open("data.grf"); err != nil {
-		log.Printf("Goro: data.grf NOT found (dataDir/GORO_DATA_DIR/default all failed): %v", err)
+		log.Printf("Goro: %v", err)
 	} else {
 		f.Close()
 		log.Println("Goro: data.grf found and opened OK")

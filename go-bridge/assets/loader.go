@@ -1,95 +1,61 @@
-package main
+//go:build android
+
+package assets
 
 import (
-	"log"
-
-	"github.com/kivutar/goro-android-port/assets"
-	"golang.org/x/mobile/app"
-	"golang.org/x/mobile/event/lifecycle"
-	"golang.org/x/mobile/event/paint"
-	"golang.org/x/mobile/event/size"
-	"golang.org/x/mobile/event/touch"
-	"golang.org/x/mobile/gl"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
-var (
-	glctx      gl.Context
-	dataLoader = assets.New("") // dataDir empty -> falls through to GORO_DATA_DIR, then defaultDataDir
-)
+// DefaultDataDir is a plain, top-level folder on shared storage — NOT under
+// /sdcard/Android/data/<package>/, which most file managers can't reach on
+// Android 11+ without root or a special toggle. Users just create this
+// folder and drop data.grf (and rdata.grf) into it.
+const DefaultDataDir = "/storage/emulated/0/Ragnarok"
 
-func main() {
-	app.Main(func(a app.App) {
-		for e := range a.Events() {
-			switch e := a.Filter(e).(type) {
-			case lifecycle.Event:
-				switch e.Crosses(lifecycle.StageVisible) {
-				case lifecycle.CrossOn:
-					glctx, _ = e.DrawContext.(gl.Context)
-					onStart()
-				case lifecycle.CrossOff:
-					onStop()
-					glctx = nil
-				}
-			case size.Event:
-				onResize(e.WidthPx, e.HeightPx)
-			case paint.Event:
-				if glctx != nil {
-					onDraw()
-					a.Publish()
-				}
-			case touch.Event:
-				onTouch(e)
-			}
+// AndroidAssetLoader resolves RO data files on Android.
+type AndroidAssetLoader struct {
+	dataDir string
+}
+
+func New(dataDir string) *AndroidAssetLoader {
+	return &AndroidAssetLoader{dataDir: dataDir}
+}
+
+// Open tries, in order:
+//  1. an explicitly-set dataDir (e.g. from a SAF folder picker, if wired up)
+//  2. the GORO_DATA_DIR environment variable
+//  3. DefaultDataDir (/storage/emulated/0/Ragnarok)
+//  4. the bare filename, relative to the process's working directory
+//
+// If every candidate fails, the returned error lists each path tried and
+// its specific error (missing file vs permission denied vs something else)
+// instead of just the last one, so a single logcat line is enough to debug.
+func (al *AndroidAssetLoader) Open(name string) (io.ReadCloser, error) {
+	var candidates []string
+	if al.dataDir != "" {
+		candidates = append(candidates, filepath.Join(al.dataDir, name))
+	}
+	if extDir := os.Getenv("GORO_DATA_DIR"); extDir != "" {
+		candidates = append(candidates, filepath.Join(extDir, name))
+	}
+	candidates = append(candidates, filepath.Join(DefaultDataDir, name))
+	candidates = append(candidates, name)
+
+	var attempts []string
+	for _, p := range candidates {
+		f, err := os.Open(p)
+		if err == nil {
+			return f, nil
 		}
-	})
-}
-
-func onStart() {
-	log.Println("Goro: surface created")
-
-	// Smoke-test GRF resolution (go-bridge/assets/loader.go). This just
-	// confirms the file can be opened - it doesn't load it into the engine
-	// yet. Look for "Goro: data.grf" in logcat after each run.
-	if f, err := dataLoader.Open("data.grf"); err != nil {
-		log.Printf("Goro: %v", err)
-	} else {
-		f.Close()
-		log.Println("Goro: data.grf found and opened OK")
+		attempts = append(attempts, fmt.Sprintf("%s (%v)", p, err))
 	}
-
-	// TODO: Initialize goro game state here.
-	// gogpu.NewApp() does NOT work on Android yet (windowing unreleased).
-	// Options:
-	//   1. Render with raw OpenGL ES (this scaffold)
-	//   2. Wait for gogpu Android platform release
-	//   3. Use gogpu's Rust backend (-tags rust) + wgpu-native for Android
+	return nil, fmt.Errorf("%s not found, tried: %s", name, strings.Join(attempts, "; "))
 }
 
-func onStop() {
-	log.Println("Goro: surface destroyed")
-}
-
-func onResize(w, h int) {
-	log.Printf("Goro: resize %dx%d", w, h)
-	if glctx != nil {
-		glctx.Viewport(0, 0, w, h)
-	}
-}
-
-func onDraw() {
-	// Minimal GL ES frame — proves the pipeline works
-	glctx.ClearColor(0.1, 0.2, 0.3, 1.0)
-	glctx.Clear(gl.COLOR_BUFFER_BIT)
-
-	// TODO: Replace with goro's render loop once upstream Android support lands.
-	// For now, this renders a dark-blue screen so you know the APK works.
-}
-
-func onTouch(e touch.Event) {
-	// Map touch to goro input
-	log.Printf("Touch: %v at (%.0f, %.0f)", e.Type, e.X, e.Y)
-
-	// Left half = virtual joystick (arrow keys)
-	// Right half = mouse click
-	// See the old touch_mapper.go for the full mapping logic.
+func (al *AndroidAssetLoader) SetDataDir(path string) {
+	al.dataDir = path
 }
