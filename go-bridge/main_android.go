@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"github.com/kivutar/goro-android-port/assets"
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
@@ -12,7 +13,8 @@ import (
 )
 
 var (
-	glctx gl.Context
+	glctx      gl.Context
+	dataLoader = assets.New("") // dataDir empty -> falls through to GORO_DATA_DIR, then defaultDataDir
 )
 
 func main() {
@@ -44,6 +46,17 @@ func main() {
 
 func onStart() {
 	log.Println("Goro: surface created")
+
+	// Smoke-test GRF resolution (go-bridge/assets/loader.go). This just
+	// confirms the file can be opened - it doesn't load it into the engine
+	// yet. Look for "Goro: data.grf" in logcat after each run.
+	if f, err := dataLoader.Open("data.grf"); err != nil {
+		log.Printf("Goro: data.grf NOT found (dataDir/GORO_DATA_DIR/default all failed): %v", err)
+	} else {
+		f.Close()
+		log.Println("Goro: data.grf found and opened OK")
+	}
+
 	// TODO: Initialize goro game state here.
 	// gogpu.NewApp() does NOT work on Android yet (windowing unreleased).
 	// Options:
