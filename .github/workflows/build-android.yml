@@ -14,8 +14,8 @@ on:
         type: boolean
 
 env:
-  GO_VERSION: '1.25'
-  NDK_VERSION: '27.0.12077973'
+  GO_VERSION: '1.23'
+  NDK_VERSION: 'r27c'
   ANDROID_API_LEVEL: '28'
 
 jobs:
@@ -37,56 +37,23 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       # ------------------------------------------------------------------
-      # 3. Setup Android SDK & NDK (with cache)
+      # 3. Setup Android NDK (official action — no manual wget)
       # ------------------------------------------------------------------
-      - name: Cache Android NDK
-        uses: actions/cache@v4
-        id: ndk-cache
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          path: ${{ runner.temp }}/android-ndk
-          key: ndk-${{ env.NDK_VERSION }}-${{ runner.os }}
+          ndk-version: ${{ env.NDK_VERSION }}
+          link-to-sdk: true
 
-      - name: Download Android NDK
-        if: steps.ndk-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ${{ runner.temp }}/android-ndk
-          cd ${{ runner.temp }}/android-ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-r${{ env.NDK_VERSION }}-linux.zip
-          unzip -q android-ndk-r${{ env.NDK_VERSION }}-linux.zip
-          mv android-ndk-r${{ env.NDK_VERSION }} ndk
-
-      - name: Set NDK env
-        run: |
-          echo "ANDROID_NDK_HOME=${{ runner.temp }}/android-ndk/ndk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
-
-      # ------------------------------------------------------------------
-      # 4. Setup Android SDK command-line tools
-      # ------------------------------------------------------------------
-      - name: Cache Android SDK
-        uses: actions/cache@v4
-        id: sdk-cache
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
         with:
-          path: ${{ runner.temp }}/android-sdk
-          key: sdk-${{ runner.os }}
-
-      - name: Download Android SDK
-        if: steps.sdk-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ${{ runner.temp }}/android-sdk/cmdline-tools
-          cd ${{ runner.temp }}/android-sdk/cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip
-          mv cmdline-tools latest
-
-      - name: Accept licenses & install platform
-        run: |
-          export PATH="${{ runner.temp }}/android-sdk/cmdline-tools/latest/bin:$PATH"
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          cmdline-tools-version: 12266719
+          packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
 
       # ------------------------------------------------------------------
-      # 5. Clone upstream dependencies
+      # 4. Clone upstream dependencies
       # ------------------------------------------------------------------
       - name: Clone goro & gogpu
         run: |
@@ -94,7 +61,7 @@ jobs:
           git clone --depth 1 https://github.com/gogpu/gogpu.git ${{ runner.temp }}/gogpu
 
       # ------------------------------------------------------------------
-      # 6. Apply Android patches automatically
+      # 5. Apply Android patches automatically
       # ------------------------------------------------------------------
       - name: Apply patches
         run: |
@@ -104,7 +71,7 @@ jobs:
           git apply $GITHUB_WORKSPACE/patches/0002-goro-android-assets.patch || echo "Patch 2 may already be applied"
 
       # ------------------------------------------------------------------
-      # 7. Configure go.mod with local replacements
+      # 6. Configure go.mod with local replacements
       # ------------------------------------------------------------------
       - name: Setup go.mod
         run: |
@@ -114,16 +81,16 @@ jobs:
           go mod tidy
 
       # ------------------------------------------------------------------
-      # 8. Build libgoro.so
+      # 7. Build libgoro.so
       # ------------------------------------------------------------------
       - name: Build Go shared library
         run: |
           export CGO_ENABLED=1
           export GOOS=android
           export GOARCH=arm64
-          export CC="${{ runner.temp }}/android-ndk/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ runner.temp }}/android-ndk/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++"
-          export SYSROOT="${{ runner.temp }}/android-ndk/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          export CC="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++"
+          export SYSROOT="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           export CGO_CFLAGS="-I$SYSROOT/usr/include"
           export CGO_LDFLAGS="-L$SYSROOT/usr/lib -landroid -llog"
 
@@ -134,27 +101,38 @@ jobs:
           file $GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a/libgoro.so
 
       # ------------------------------------------------------------------
-      # 9. Generate Gradle wrapper (if missing) and build APK
+      # 8. Generate Gradle wrapper and build APK
       # ------------------------------------------------------------------
       - name: Setup Gradle wrapper
         run: |
           cd $GITHUB_WORKSPACE/android
           if [ ! -f gradlew ]; then
-            export PATH="${{ runner.temp }}/android-sdk/cmdline-tools/latest/bin:$PATH"
-            sdkmanager "gradle" || true
-            # Fallback: use the Gradle wrapper generator
-            curl -L https://services.gradle.org/distributions/gradle-8.9-bin.zip -o gradle.zip
-            unzip -q gradle.zip
-            ./gradle-8.9/bin/gradle wrapper --gradle-version 8.9
+            # Use the Gradle wrapper task to bootstrap
+            mkdir -p gradle/wrapper
+            cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-bin.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+            curl -L -o gradle/wrapper/gradle-wrapper.jar               https://raw.githubusercontent.com/gradle/gradle/v8.9.0/gradle/wrapper/gradle-wrapper.jar
+            cat > gradlew << 'EOF'
+          #!/bin/sh
+          exec "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" "$@"
+          EOF
+            chmod +x gradlew
           fi
 
       - name: Build APK
         run: |
           cd $GITHUB_WORKSPACE/android
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       # ------------------------------------------------------------------
-      # 10. Upload APK as artifact (always available for 90 days)
+      # 9. Upload APK as artifact
       # ------------------------------------------------------------------
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -164,16 +142,14 @@ jobs:
           retention-days: 90
 
       # ------------------------------------------------------------------
-      # 11. Create GitHub Release (manual trigger only)
+      # 10. Create GitHub Release (manual trigger only)
       # ------------------------------------------------------------------
       - name: Sign APK (debug keystore)
         if: github.event.inputs.release == 'true'
         run: |
-          # Generate a debug keystore for release builds
           keytool -genkey -v             -keystore $GITHUB_WORKSPACE/debug.keystore             -alias goro             -keyalg RSA -keysize 2048 -validity 10000             -storepass android -keypass android             -dname "CN=Goro Android"
 
-          # Align and sign
-          export PATH="${{ runner.temp }}/android-sdk/build-tools/35.0.0:$PATH"
+          export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
           zipalign -v 4             $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk             $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug-aligned.apk
           apksigner sign             --ks $GITHUB_WORKSPACE/debug.keystore             --ks-pass pass:android             --key-pass pass:android             $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug-aligned.apk
           mv $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug-aligned.apk              $GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/goro-android.apk
