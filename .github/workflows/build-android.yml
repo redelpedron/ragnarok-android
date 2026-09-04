@@ -3,13 +3,12 @@ name: Build Android APK
 on:
   push:
     branches: [main, master]
-
   workflow_dispatch:
     inputs:
       release:
-        description: "Create stable GitHub Release?"
+        description: 'Create stable GitHub Release?'
         required: false
-        default: false
+        default: 'false'
         type: boolean
 
 permissions:
@@ -18,37 +17,21 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      # ------------------------------------------------------------
-      # Checkout
-      # ------------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # Go
-      # ------------------------------------------------------------
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: '1.26'
 
-      # ------------------------------------------------------------
-      # Android SDK
-      # ------------------------------------------------------------
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           cmdline-tools-version: 12266719
-          packages: |
-            platforms;android-34
-            build-tools;35.0.0
-            platform-tools
+          packages: 'platforms;android-34 build-tools;35.0.0 platform-tools'
 
-      # ------------------------------------------------------------
-      # Android NDK
-      # ------------------------------------------------------------
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -56,142 +39,66 @@ jobs:
           ndk-version: r26b
           link-to-sdk: true
 
-      # ------------------------------------------------------------
-      # Remove conflicting pre-installed NDK
-      # ------------------------------------------------------------
       - name: Remove conflicting pre-installed NDK
         run: |
           rm -rf /usr/local/lib/android/sdk/ndk/27.3.13750724 || true
           rm -rf /usr/local/lib/android/sdk/ndk-bundle || true
 
-      # ------------------------------------------------------------
-      # Install gomobile
-      # ------------------------------------------------------------
       - name: Install gomobile
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          set -euo pipefail
-
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/gobind@latest
-
-          export PATH="$PATH:$(go env GOPATH)/bin"
-
-          gomobile version || true
+          export PATH=$PATH:$(go env GOPATH)/bin
           gomobile init
 
-      # ------------------------------------------------------------
-      # Clone upstream goro
-      # ------------------------------------------------------------
       - name: Clone upstream goro
         run: |
-          set -euo pipefail
+          git clone --depth 1 https://github.com/kivutar/goro.git ${{ runner.temp }}/goro
 
-          git clone \
-            --depth 1 \
-            https://github.com/kivutar/goro.git \
-            "${{ runner.temp }}/goro"
-
-      # ------------------------------------------------------------
-      # Configure Go module
-      # ------------------------------------------------------------
       - name: Setup go.mod
         run: |
-          set -euo pipefail
-
-          cd "$GITHUB_WORKSPACE/go-bridge"
-
-          go mod edit \
-            -replace github.com/kivutar/goro=${{ runner.temp }}/goro
-
+          cd $GITHUB_WORKSPACE/go-bridge
+          go mod edit -replace github.com/kivutar/goro=${{ runner.temp }}/goro
           go mod tidy
 
-          echo "=== go.mod ==="
-          cat go.mod
-
-      # ------------------------------------------------------------
-      # Build raw APK with gomobile
-      # ------------------------------------------------------------
       - name: Build APK with gomobile
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          set -euo pipefail
+          export PATH=$PATH:$(go env GOPATH)/bin
+          cd $GITHUB_WORKSPACE/go-bridge
+          gomobile build -androidapi 34 -target=android/arm64 -o $GITHUB_WORKSPACE/goro-raw.apk .
 
-          export PATH="$PATH:$(go env GOPATH)/bin"
-
-          cd "$GITHUB_WORKSPACE/go-bridge"
-
-          gomobile build \
-            -androidapi 34 \
-            -target=android/arm64 \
-            -o "$GITHUB_WORKSPACE/goro-raw.apk" \
-            .
-
-          echo "=== Raw APK ==="
-          ls -lh "$GITHUB_WORKSPACE/goro-raw.apk"
-
-      # ------------------------------------------------------------
-      # Generate signing keystore
-      # ------------------------------------------------------------
-      - name: Generate signing keystore
+      - name: Align and sign APK
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           set -euo pipefail
-
-          if [ ! -f "$GITHUB_WORKSPACE/goro-release.jks" ]; then
-            keytool -genkeypair \
-              -keystore "$GITHUB_WORKSPACE/goro-release.jks" \
-              -alias goro \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass android \
-              -keypass android \
-              -dname "CN=Goro Android" \
-              -storetype PKCS12
-          fi
-
-          echo "=== Keystore ==="
-          keytool \
-            -list \
-            -keystore "$GITHUB_WORKSPACE/goro-release.jks" \
-            -storepass android
-
-      # ------------------------------------------------------------
-      # Align APK
-      # ------------------------------------------------------------
-      - name: Align APK
-        run: |
-          set -euo pipefail
-
           BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/35.0.0"
           export PATH="$BUILD_TOOLS:$PATH"
 
-          zipalign \
-            -f \
-            -p \
-            4 \
+          echo "=== Aligning APK ==="
+          zipalign -f -p 4 \
             "$GITHUB_WORKSPACE/goro-raw.apk" \
             "$GITHUB_WORKSPACE/goro-aligned.apk"
 
-          echo "=== Alignment verification ==="
+          echo "=== Generating signing key ==="
+          keytool -genkeypair \
+            -keystore "$GITHUB_WORKSPACE/debug.keystore" \
+            -alias goro \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass android \
+            -keypass android \
+            -dname "CN=Goro Android" \
+            -storetype PKCS12
 
-          zipalign -c -v 4 \
-            "$GITHUB_WORKSPACE/goro-aligned.apk"
-
-      # ------------------------------------------------------------
-      # Sign APK using APK Signature Scheme v2/v3
-      # ------------------------------------------------------------
-      - name: Sign APK
-        run: |
-          set -euo pipefail
-
-          BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/35.0.0"
-          export PATH="$BUILD_TOOLS:$PATH"
-
+          echo "=== Signing APK ==="
           apksigner sign \
-            --ks "$GITHUB_WORKSPACE/goro-release.jks" \
+            --ks "$GITHUB_WORKSPACE/debug.keystore" \
             --ks-pass pass:android \
             --key-pass pass:android \
             --v1-signing-enabled true \
@@ -200,72 +107,19 @@ jobs:
             --out "$GITHUB_WORKSPACE/goro.apk" \
             "$GITHUB_WORKSPACE/goro-aligned.apk"
 
-          echo "=== Signed APK ==="
+          echo "=== Verifying APK ==="
+          apksigner verify --verbose --print-certs "$GITHUB_WORKSPACE/goro.apk" | tee verification.txt
+
+          echo "=== Checking v2/v3 signatures ==="
+          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" verification.txt
+          grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" verification.txt
+
+          echo "=== APK Info ==="
+          aapt dump badging "$GITHUB_WORKSPACE/goro.apk" | head -10
+
+          echo "=== APK SIZE ==="
           ls -lh "$GITHUB_WORKSPACE/goro.apk"
 
-      # ------------------------------------------------------------
-      # Verify APK signature
-      # ------------------------------------------------------------
-      - name: Verify APK signature
-        run: |
-          set -euo pipefail
-
-          BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/35.0.0"
-          export PATH="$BUILD_TOOLS:$PATH"
-
-          echo "=== APK SIGNATURE VERIFICATION ==="
-
-          apksigner verify \
-            --verbose \
-            --print-certs \
-            "$GITHUB_WORKSPACE/goro.apk"
-
-          echo ""
-          echo "=== Checking v2/v3 signing ==="
-
-          apksigner verify \
-            --verbose \
-            "$GITHUB_WORKSPACE/goro.apk" \
-            2>&1 | tee "$GITHUB_WORKSPACE/apksigner-verification.txt"
-
-          grep -q \
-            "Verified using v2 scheme (APK Signature Scheme v2): true" \
-            "$GITHUB_WORKSPACE/apksigner-verification.txt"
-
-          grep -q \
-            "Verified using v3 scheme (APK Signature Scheme v3): true" \
-            "$GITHUB_WORKSPACE/apksigner-verification.txt"
-
-          echo ""
-          echo "=========================================="
-          echo " APK SIGNATURE VERIFICATION PASSED"
-          echo " v2: true"
-          echo " v3: true"
-          echo "=========================================="
-
-      # ------------------------------------------------------------
-      # Show APK information
-      # ------------------------------------------------------------
-      - name: Inspect APK
-        run: |
-          set -euo pipefail
-
-          BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/35.0.0"
-          export PATH="$BUILD_TOOLS:$PATH"
-
-          echo "=== APK BADGING ==="
-
-          aapt dump badging \
-            "$GITHUB_WORKSPACE/goro.apk"
-
-          echo ""
-          echo "=== APK FILE ==="
-
-          ls -lh "$GITHUB_WORKSPACE/goro.apk"
-
-      # ------------------------------------------------------------
-      # Upload APK artifact
-      # ------------------------------------------------------------
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -273,9 +127,6 @@ jobs:
           path: goro.apk
           retention-days: 90
 
-      # ------------------------------------------------------------
-      # Automatic prerelease on push
-      # ------------------------------------------------------------
       - name: Auto pre-release on push
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
@@ -285,31 +136,18 @@ jobs:
           name: Auto Build ${{ github.run_number }}
           prerelease: true
           body: |
-            Automatic Android build.
-
-            Built for:
-            - ARM64
-            - Android API 34
-            - Android 9+ compatible target configuration
-
-            APK is signed using APK Signature Scheme v2/v3.
-
-            If an older installation uses a different signing key,
-            uninstall the previous version before installing this APK.
-
-            Data file:
-            Place your `data.grf` in:
-
-            /sdcard/Android/data/com.goro.android/files/
-
+            Automatic build for Pixel 6 / Android 15+.
+            
+            **To install:** Download `goro.apk` below.
+            - If you have an old version: **Uninstall it first** (signature conflict)
+            - Then tap the APK to install
+            
+            **Note:** Provide your own `data.grf`. Place in `/sdcard/Android/data/com.goro.android/files/`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ------------------------------------------------------------
-      # Stable release
-      # ------------------------------------------------------------
       - name: Stable release
-        if: github.event_name == 'workflow_dispatch' && inputs.release == true
+        if: github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: goro.apk
@@ -317,21 +155,7 @@ jobs:
           name: Goro Android v${{ github.run_number }}
           prerelease: false
           body: |
-            Stable Android release.
-
-            Built for:
-            - ARM64
-            - Android API 34
-
-            APK is signed using APK Signature Scheme v2/v3.
-
-            If an older installation uses a different signing key,
-            uninstall the previous version before installing this APK.
-
-            Data file:
-            Place your `data.grf` in:
-
-            /sdcard/Android/data/com.goro.android/files/
-
+            Stable release. Uninstall old version before installing.
+            Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
