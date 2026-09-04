@@ -71,28 +71,69 @@ jobs:
           cd $GITHUB_WORKSPACE/go-bridge
           gomobile build -androidapi 34 -target=android/arm64 -o $GITHUB_WORKSPACE/goro-raw.apk .
 
-      - name: Verify target SDK is installable on modern Android
+      - name: Inspect raw APK manifest
         run: |
           export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
-          BADGING=$(aapt dump badging "$GITHUB_WORKSPACE/goro-raw.apk")
-          echo "$BADGING"
-          TARGET_SDK=$(echo "$BADGING" | grep -oP "targetSdkVersion:'\\K[0-9]+" || true)
-          if [ -z "$TARGET_SDK" ] || [ "$TARGET_SDK" -lt 24 ]; then
-            echo "::error::targetSdkVersion is '$TARGET_SDK' — Android 15+ refuses to install anything below 24."
-            exit 1
-          fi
-          echo "✅ targetSdkVersion=$TARGET_SDK — acceptable for modern Android."
+          echo "=== RAW APK MANIFEST ==="
+          aapt dump badging $GITHUB_WORKSPACE/goro-raw.apk
 
-      - name: Cache debug keystore
-        uses: actions/cache@v4
-        id: keystore-cache
-        with:
-          path: ${{ github.workspace }}/debug.keystore
-          key: goro-debug-keystore-v1
-
-      - name: Generate debug keystore
-        if: steps.keystore-cache.outputs.cache-hit != 'true'
+      # ------------------------------------------------------------------
+      # Patch manifest with apktool + Python (proper XML handling)
+      # ------------------------------------------------------------------
+      - name: Patch manifest and re-sign APK
         run: |
+          set -euo pipefail
+          export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
+          
+          echo "=== Downloading apktool ==="
+          wget -q "https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar" -O apktool.jar
+          ls -la apktool.jar
+          
+          echo "=== Decompiling APK ==="
+          java -jar apktool.jar d "$GITHUB_WORKSPACE/goro-raw.apk" -o "$GITHUB_WORKSPACE/goro_decompiled" -f
+          
+          echo "=== ORIGINAL MANIFEST ==="
+          cat "$GITHUB_WORKSPACE/goro_decompiled/AndroidManifest.xml"
+          
+          echo "=== Patching manifest with Python ==="
+          python3 << 'PYEOF'
+          import os
+          import xml.etree.ElementTree as ET
+
+          manifest_path = os.path.join(os.environ['GITHUB_WORKSPACE'], 'goro_decompiled', 'AndroidManifest.xml')
+
+          # Register Android namespace so ElementTree preserves 'android:' prefix
+          ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
+
+          tree = ET.parse(manifest_path)
+          root = tree.getroot()
+
+          NS = '{http://schemas.android.com/apk/res/android}'
+
+          # Find or create <uses-sdk>
+          uses_sdk = root.find(f'.//{NS}uses-sdk')
+          if uses_sdk is None:
+              uses_sdk = ET.SubElement(root, 'uses-sdk')
+
+          # Set minSdkVersion=28, targetSdkVersion=34
+          uses_sdk.set(NS + 'minSdkVersion', '28')
+          uses_sdk.set(NS + 'targetSdkVersion', '34')
+
+          tree.write(manifest_path, xml_declaration=True, encoding='utf-8')
+          print("Manifest patched: minSdk=28, targetSdk=34")
+          PYEOF
+          
+          echo "=== PATCHED MANIFEST ==="
+          cat "$GITHUB_WORKSPACE/goro_decompiled/AndroidManifest.xml"
+          
+          echo "=== Recompiling APK ==="
+          java -jar apktool.jar b --use-aapt2 "$GITHUB_WORKSPACE/goro_decompiled" -o "$GITHUB_WORKSPACE/goro_rebuilt.apk"
+          ls -lh "$GITHUB_WORKSPACE/goro_rebuilt.apk"
+          
+          echo "=== Aligning APK ==="
+          zipalign -f -p 4 "$GITHUB_WORKSPACE/goro_rebuilt.apk" "$GITHUB_WORKSPACE/goro_aligned.apk"
+          
+          echo "=== Generating keystore ==="
           keytool -genkeypair \
             -keystore "$GITHUB_WORKSPACE/debug.keystore" \
             -alias goro \
@@ -103,18 +144,7 @@ jobs:
             -keypass android \
             -dname "CN=Goro Android" \
             -storetype PKCS12
-
-      - name: Align and sign APK
-        run: |
-          set -euo pipefail
-          BUILD_TOOLS="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0"
-          export PATH="$BUILD_TOOLS:$PATH"
-
-          echo "=== Aligning APK ==="
-          zipalign -f -p 4 \
-            "$GITHUB_WORKSPACE/goro-raw.apk" \
-            "$GITHUB_WORKSPACE/goro-aligned.apk"
-
+          
           echo "=== Signing APK ==="
           apksigner sign \
             --ks "$GITHUB_WORKSPACE/debug.keystore" \
@@ -124,14 +154,17 @@ jobs:
             --v2-signing-enabled true \
             --v3-signing-enabled true \
             --out "$GITHUB_WORKSPACE/goro.apk" \
-            "$GITHUB_WORKSPACE/goro-aligned.apk"
-
+            "$GITHUB_WORKSPACE/goro_aligned.apk"
+          
           echo "=== Verifying APK ==="
           apksigner verify --verbose --print-certs "$GITHUB_WORKSPACE/goro.apk" | tee verification.txt
-
+          
           echo "=== Checking v2/v3 signatures ==="
           grep "Verified using v2 scheme (APK Signature Scheme v2): true" verification.txt
           grep "Verified using v3 scheme (APK Signature Scheme v3): true" verification.txt
+          
+          echo "=== Final APK info ==="
+          aapt dump badging "$GITHUB_WORKSPACE/goro.apk" | head -15
 
       - name: Rename APK with build number
         run: |
