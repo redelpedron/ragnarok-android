@@ -71,20 +71,25 @@ jobs:
           cd $GITHUB_WORKSPACE/go-bridge
           gomobile build -androidapi 34 -target=android/arm64 -o $GITHUB_WORKSPACE/goro-raw.apk .
 
-      - name: Align and sign APK
-        env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+      - name: Inspect raw APK manifest
         run: |
-          set -euo pipefail
-          BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/35.0.0"
-          export PATH="$BUILD_TOOLS:$PATH"
+          export PATH="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0:$PATH"
+          echo "=== RAW APK MANIFEST ==="
+          aapt dump badging $GITHUB_WORKSPACE/goro-raw.apk
+          echo ""
+          echo "=== RAW APK SIGNATURE ==="
+          apksigner verify -v $GITHUB_WORKSPACE/goro-raw.apk 2>&1 || true
 
-          echo "=== Aligning APK ==="
-          zipalign -f -p 4 \
-            "$GITHUB_WORKSPACE/goro-raw.apk" \
-            "$GITHUB_WORKSPACE/goro-aligned.apk"
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        id: keystore-cache
+        with:
+          path: ${{ github.workspace }}/debug.keystore
+          key: goro-debug-keystore-v1
 
-          echo "=== Generating signing key ==="
+      - name: Generate debug keystore
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
+        run: |
           keytool -genkeypair \
             -keystore "$GITHUB_WORKSPACE/debug.keystore" \
             -alias goro \
@@ -95,6 +100,17 @@ jobs:
             -keypass android \
             -dname "CN=Goro Android" \
             -storetype PKCS12
+
+      - name: Align and sign APK
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0"
+          export PATH="$BUILD_TOOLS:$PATH"
+
+          echo "=== Aligning APK ==="
+          zipalign -f -p 4 \
+            "$GITHUB_WORKSPACE/goro-raw.apk" \
+            "$GITHUB_WORKSPACE/goro-aligned.apk"
 
           echo "=== Signing APK ==="
           apksigner sign \
@@ -111,11 +127,11 @@ jobs:
           apksigner verify --verbose --print-certs "$GITHUB_WORKSPACE/goro.apk" | tee verification.txt
 
           echo "=== Checking v2/v3 signatures ==="
-          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" verification.txt
-          grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" verification.txt
+          grep "Verified using v2 scheme (APK Signature Scheme v2): true" verification.txt
+          grep "Verified using v3 scheme (APK Signature Scheme v3): true" verification.txt
 
-          echo "=== APK Info ==="
-          aapt dump badging "$GITHUB_WORKSPACE/goro.apk" | head -10
+          echo "=== Final APK Info ==="
+          aapt dump badging "$GITHUB_WORKSPACE/goro.apk" | head -15
 
           echo "=== APK SIZE ==="
           ls -lh "$GITHUB_WORKSPACE/goro.apk"
@@ -139,8 +155,11 @@ jobs:
             Automatic build for Pixel 6 / Android 15+.
             
             **To install:** Download `goro.apk` below.
-            - If you have an old version: **Uninstall it first** (signature conflict)
+            - **Uninstall any old version first** (Settings → Apps → Goro → Uninstall)
             - Then tap the APK to install
+            
+            If install still fails, the APK manifest and signature were verified in CI.
+            Check the build logs for `=== Final APK Info ===` to confirm.
             
             **Note:** Provide your own `data.grf`. Place in `/sdcard/Android/data/com.goro.android/files/`.
         env:
