@@ -9,6 +9,7 @@ import (
 	"github.com/kivutar/goro-android-port/ui"
 	"github.com/kivutar/goro/res"
 	"golang.org/x/mobile/app"
+	"golang.org/x/mobile/event/key"
 	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
 	"golang.org/x/mobile/event/size"
@@ -23,6 +24,8 @@ var (
 
 	overlay          *ui.Overlay
 	debugPanel       *debug.Panel
+	loginScreen      *ui.LoginScreen
+	showingLogin     = true // no character-select/gameplay screen exists yet, so this is the only screen
 	screenW, screenH int
 
 	joystick             ui.JoystickState
@@ -56,6 +59,8 @@ func main() {
 				}
 			case touch.Event:
 				onTouch(e)
+			case key.Event:
+				onKey(e)
 			}
 		}
 	})
@@ -66,6 +71,11 @@ func onStart() {
 
 	overlay = ui.New(glctx)
 	debugPanel = debug.New(glctx)
+	loginScreen = ui.NewLogin(glctx)
+	loginScreen.SetOnSubmit(handleLoginSubmit)
+	if screenW != 0 || screenH != 0 {
+		loginScreen.SetScreenSize(screenW, screenH) // onStart can re-fire after onResize already ran
+	}
 
 	if grfArchive == nil { // onStart re-fires on every resume, not just launch
 		loadGRF()
@@ -77,6 +87,23 @@ func onStart() {
 	//   1. Render with raw OpenGL ES (this scaffold)
 	//   2. Wait for gogpu Android platform release
 	//   3. Use gogpu's Rust backend (-tags rust) + wgpu-native for Android
+}
+
+// handleLoginSubmit fires when the login screen's button is tapped (or
+// Enter is pressed from the password field). Real network login isn't
+// wired yet - goro's session/network login API wasn't available to verify
+// here (same reason touch_mapper.go's input wiring was left as a TODO
+// instead of guessed at), so this only gives the tester visible feedback
+// that the tap registered. Never log the password.
+func handleLoginSubmit(username, password string) {
+	log.Printf("Goro: login submitted, user=%q (network login not wired yet)", username)
+	loginScreen.SetStatus("Login not wired to network yet - see handleLoginSubmit")
+}
+
+func onKey(e key.Event) {
+	if showingLogin && loginScreen != nil {
+		loginScreen.HandleKey(e)
+	}
 }
 
 // loadGRF locates data.grf via the asset loader, then parses it with
@@ -118,6 +145,9 @@ func onResize(w, h int) {
 	if debugPanel != nil {
 		debugPanel.SetScreenSize(w, h)
 	}
+	if loginScreen != nil {
+		loginScreen.SetScreenSize(w, h)
+	}
 }
 
 func onDraw() {
@@ -128,8 +158,14 @@ func onDraw() {
 	// TODO: Replace with goro's render loop once upstream Android support lands.
 	// For now, this renders a dark-blue screen so you know the APK works.
 
-	if overlay != nil {
+	if showingLogin && loginScreen != nil {
+		loginScreen.Draw()
+	} else if overlay != nil {
+		// Joystick/action-button controls only make sense once there's a
+		// game to control - hidden while the login screen is up.
 		overlay.Draw(joystick, buttonPressed)
+	}
+	if overlay != nil {
 		overlay.DrawDebugToggle()
 	}
 
@@ -181,6 +217,13 @@ func onTouch(e touch.Event) {
 			}
 		}
 		return
+	}
+
+	if showingLogin {
+		if e.Type == touch.TypeBegin && loginScreen != nil {
+			loginScreen.HandleTouchBegin(fx, fy)
+		}
+		return // no joystick/gameplay touches while the login screen is up
 	}
 
 	// Left half of the screen = virtual joystick, right half = action

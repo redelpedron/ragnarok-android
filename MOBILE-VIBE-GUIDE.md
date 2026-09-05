@@ -1,263 +1,102 @@
-package main
+# Mobile Vibe Coding Guide
 
-import (
-	"fmt"
-	"log"
+You are reading this on a phone. Good — you don't need Android Studio,
+a PC, or even the `go` command installed locally. Everything happens in
+GitHub Actions.
 
-	"github.com/kivutar/goro-android-port/assets"
-	"github.com/kivutar/goro-android-port/debug"
-	"github.com/kivutar/goro-android-port/ui"
-	"github.com/kivutar/goro/res"
-	"golang.org/x/mobile/app"
-	"golang.org/x/mobile/event/key"
-	"golang.org/x/mobile/event/lifecycle"
-	"golang.org/x/mobile/event/paint"
-	"golang.org/x/mobile/event/size"
-	"golang.org/x/mobile/event/touch"
-	"golang.org/x/mobile/gl"
-)
+## Step-by-step (do this on your phone)
 
-var (
-	glctx      gl.Context
-	dataLoader = assets.New("") // dataDir empty -> falls through to GORO_DATA_DIR, then defaultDataDir
-	grfArchive *res.GRF
+### 1. Create your repo
 
-	overlay          *ui.Overlay
-	debugPanel       *debug.Panel
-	loginScreen      *ui.LoginScreen
-	showingLogin     = true // no character-select/gameplay screen exists yet, so this is the only screen
-	screenW, screenH int
+1. Open **GitHub** in your mobile browser.
+2. Tap **+ → New repository**.
+3. Name it `goro-android` (or whatever).
+4. Make it **Public** (Actions are free and unlimited for public repos).
+5. Tap **Create repository**.
 
-	joystick             ui.JoystickState
-	joystickTracking     bool
-	joystickSeq          touch.Sequence
-	buttonPressed        bool
-	buttonSeq            touch.Sequence
-	debugToggleTracking  bool
-	debugToggleSeq       touch.Sequence
-)
+### 2. Upload the scaffold files
 
-func main() {
-	app.Main(func(a app.App) {
-		for e := range a.Events() {
-			switch e := a.Filter(e).(type) {
-			case lifecycle.Event:
-				switch e.Crosses(lifecycle.StageVisible) {
-				case lifecycle.CrossOn:
-					glctx, _ = e.DrawContext.(gl.Context)
-					onStart()
-				case lifecycle.CrossOff:
-					onStop()
-					glctx = nil
-				}
-			case size.Event:
-				onResize(e.WidthPx, e.HeightPx)
-			case paint.Event:
-				if glctx != nil {
-					onDraw()
-					a.Publish()
-				}
-			case touch.Event:
-				onTouch(e)
-			case key.Event:
-				onKey(e)
-			}
-		}
-	})
-}
+You need to get the files from this scaffold into your repo.
 
-func onStart() {
-	log.Println("Goro: surface created")
+**Option A: Fork (easiest)**
+- If someone already uploaded this scaffold as a template repo, tap **Fork**.
 
-	overlay = ui.New(glctx)
-	debugPanel = debug.New(glctx)
-	loginScreen = ui.NewLogin(glctx)
-	loginScreen.SetOnSubmit(handleLoginSubmit)
-	if screenW != 0 || screenH != 0 {
-		loginScreen.SetScreenSize(screenW, screenH) // onStart can re-fire after onResize already ran
-	}
+**Option B: Upload ZIP**
+1. Download `goro-android-port.zip` from the release / conversation.
+2. On your phone, extract it (Files app, ZArchiver, etc.).
+3. Open GitHub mobile → your repo → **Add file → Upload files**.
+4. Select all extracted files. Tap **Commit**.
 
-	if grfArchive == nil { // onStart re-fires on every resume, not just launch
-		loadGRF()
-	}
+**Option C: GitHub Web Editor (no ZIP needed)**
+1. In your repo, tap `.` (period) on your phone keyboard — this opens the
+   GitHub web editor.
+2. Create each file manually by path:
+   - `.github/workflows/build-android.yml`
+   - `android/app/build.gradle`
+   - `android/app/src/main/AndroidManifest.xml`
+   - etc.
+3. Paste the contents from this scaffold.
 
-	// TODO: Initialize goro game state here.
-	// gogpu.NewApp() does NOT work on Android yet (windowing unreleased).
-	// Options:
-	//   1. Render with raw OpenGL ES (this scaffold)
-	//   2. Wait for gogpu Android platform release
-	//   3. Use gogpu's Rust backend (-tags rust) + wgpu-native for Android
-}
+### 3. Trigger your first build
 
-// handleLoginSubmit fires when the login screen's button is tapped (or
-// Enter is pressed from the password field). Real network login isn't
-// wired yet - goro's session/network login API wasn't available to verify
-// here (same reason touch_mapper.go's input wiring was left as a TODO
-// instead of guessed at), so this only gives the tester visible feedback
-// that the tap registered. Never log the password.
-func handleLoginSubmit(username, password string) {
-	log.Printf("Goro: login submitted, user=%q (network login not wired yet)", username)
-	loginScreen.SetStatus("Login not wired to network yet - see handleLoginSubmit")
-}
+1. In your repo, tap **Actions**.
+2. You should see the **Build Android APK** workflow.
+3. Tap it, then tap **Run workflow → Run workflow**.
+4. Wait ~5–8 minutes. The runner downloads the NDK, clones goro, applies
+   patches, and builds the APK.
 
-func onKey(e key.Event) {
-	if showingLogin && loginScreen != nil {
-		loginScreen.HandleKey(e)
-	}
-}
+### 4. Download the APK
 
-// loadGRF locates data.grf via the asset loader, then parses it with
-// goro's own res.OpenGRF - the real, tested GRF reader from
-// github.com/kivutar/goro/res (handles the DES-encrypted entry types and
-// Korean filename encoding for real; nothing here is guessed).
-func loadGRF() {
-	path, err := dataLoader.ResolvePath("data.grf")
-	if err != nil {
-		log.Printf("Goro: %v", err)
-		return
-	}
-	archive, err := res.OpenGRF(path)
-	if err != nil {
-		log.Printf("Goro: data.grf found at %s but failed to parse: %v", path, err)
-		return
-	}
-	grfArchive = archive
-	log.Printf("Goro: data.grf opened OK, %d files", archive.Count())
-	names := archive.Names()
-	for i := 0; i < len(names) && i < 5; i++ {
-		log.Printf("Goro: sample entry: %s", names[i])
-	}
-}
+1. When the workflow finishes (green checkmark), tap into the run.
+2. Scroll to **Artifacts**.
+3. Tap **goro-android-debug** to download `app-debug.apk`.
+4. Transfer it to your phone (if you downloaded on another device) and install.
 
-func onStop() {
-	log.Println("Goro: surface destroyed")
-}
+   **Android 8+:** You may need to allow "Install unknown apps" for your
+   browser/files app.
 
-func onResize(w, h int) {
-	log.Printf("Goro: resize %dx%d", w, h)
-	screenW, screenH = w, h
-	if glctx != nil {
-		glctx.Viewport(0, 0, w, h)
-	}
-	if overlay != nil {
-		overlay.SetScreenSize(w, h)
-	}
-	if debugPanel != nil {
-		debugPanel.SetScreenSize(w, h)
-	}
-	if loginScreen != nil {
-		loginScreen.SetScreenSize(w, h)
-	}
-}
+### 5. Provide game data
 
-func onDraw() {
-	// Minimal GL ES frame — proves the pipeline works
-	glctx.ClearColor(0.1, 0.2, 0.3, 1.0)
-	glctx.Clear(gl.COLOR_BUFFER_BIT)
+The APK does **not** contain RO assets (copyright). On first launch:
 
-	// TODO: Replace with goro's render loop once upstream Android support lands.
-	// For now, this renders a dark-blue screen so you know the APK works.
+1. The app asks you to pick a folder.
+2. Select the folder containing your `data.grf` (and `rdata.grf` if renewal).
 
-	if showingLogin && loginScreen != nil {
-		loginScreen.Draw()
-	} else if overlay != nil {
-		// Joystick/action-button controls only make sense once there's a
-		// game to control - hidden while the login screen is up.
-		overlay.Draw(joystick, buttonPressed)
-	}
-	if overlay != nil {
-		overlay.DrawDebugToggle()
-	}
+**Where to get data.grf:**
+- Copy it from an existing PC RO client installation.
+- Or download a pre-renewal repack (~775 MB) and extract it on your phone.
+- Place it in `/sdcard/Android/data/com.goro.android/files/` to skip the picker.
 
-	if debugPanel != nil {
-		debugPanel.Tick()
-		debugPanel.Draw(debugLines())
-	}
-}
+### 6. Release builds (optional)
 
-// debugLines is the content shown in the debug panel. Kept in
-// main_android.go (not the debug package) since it's the one place that
-// knows about GRF/game state - the debug package itself stays generic.
-func debugLines() []string {
-	grfStatus := "data.grf: not loaded"
-	if grfArchive != nil {
-		grfStatus = fmt.Sprintf("data.grf: %d files", grfArchive.Count())
-	}
-	return []string{
-		fmt.Sprintf("FPS: %.0f", debugPanel.FPS()),
-		fmt.Sprintf("Screen: %dx%d", screenW, screenH),
-		grfStatus,
-		fmt.Sprintf("Joystick active: %v", joystick.Active),
-		fmt.Sprintf("Button pressed: %v", buttonPressed),
-	}
-}
+Instead of downloading artifacts, you can publish a proper GitHub Release:
 
-func onTouch(e touch.Event) {
-	log.Printf("Touch: %v at (%.0f, %.0f)", e.Type, e.X, e.Y)
-	if screenW == 0 || screenH == 0 {
-		return // haven't had a resize event yet, nothing to normalize against
-	}
+1. Go to **Actions → Build Android APK**.
+2. Tap **Run workflow**.
+3. Toggle **Create GitHub Release?** to `true`.
+4. The workflow will create a signed APK and attach it to a release tag.
+5. Go to **Releases** in your repo to download it.
 
-	// Top-right corner = debug panel toggle, checked first so it can't be
-	// confused with the joystick/button zones below it.
-	fx := e.X / float32(screenW)
-	fy := e.Y / float32(screenH)
+## Troubleshooting from mobile
 
-	if fx > 0.85 && fy < 0.12 {
-		switch e.Type {
-		case touch.TypeBegin:
-			debugToggleTracking = true
-			debugToggleSeq = e.Sequence
-		case touch.TypeEnd:
-			if debugToggleTracking && e.Sequence == debugToggleSeq {
-				debugToggleTracking = false
-				if debugPanel != nil {
-					debugPanel.Toggle()
-				}
-			}
-		}
-		return
-	}
+| Problem | Fix |
+|---|---|
+| **Workflow fails at "Apply patches"** | Upstream goro/gogpu may have changed. Edit the patch files in the web editor to match the current source. |
+| **APK installs but crashes** | Check **Actions → Build logs → Build Go shared library** for compile errors. Also verify your phone supports Vulkan. |
+| **Can't upload files on mobile** | Use the GitHub app → your repo → **Browse** → tap the `...` menu → **Add file**. Or use a Git client like MGit or Termux. |
+| **GRF picker never shows** | Grant **Files and media** permission to the app in Android Settings. |
 
-	if showingLogin {
-		if e.Type == touch.TypeBegin && loginScreen != nil {
-			loginScreen.HandleTouchBegin(fx, fy)
-		}
-		return // no joystick/gameplay touches while the login screen is up
-	}
+## What the CI does (summary)
 
-	// Left half of the screen = virtual joystick, right half = action
-	// button. Tracked per-finger by touch.Sequence so both can be held at
-	// once without one interrupting the other.
+Every time you push or tap "Run workflow":
 
-	switch e.Type {
-	case touch.TypeBegin:
-		if fx > 0.5 {
-			buttonPressed = true
-			buttonSeq = e.Sequence
-		} else {
-			joystickTracking = true
-			joystickSeq = e.Sequence
-			joystick = ui.JoystickState{Active: true, CenterX: fx, CenterY: fy, CurrentX: fx, CurrentY: fy}
-		}
-	case touch.TypeMove:
-		if joystickTracking && e.Sequence == joystickSeq {
-			joystick.CurrentX, joystick.CurrentY = fx, fy
-		}
-	case touch.TypeEnd:
-		if e.Sequence == joystickSeq {
-			joystickTracking = false
-			joystick.Active = false
-		}
-		if e.Sequence == buttonSeq {
-			buttonPressed = false
-		}
-	}
+1. Spins up an Ubuntu runner in the cloud.
+2. Installs Go 1.25, Android NDK r27, and Android SDK build-tools.
+3. Clones `kivutar/goro` and `gogpu/gogpu`.
+4. Automatically applies the Android patches from your repo.
+5. Cross-compiles `libgoro.so` for `android/arm64`.
+6. Packages it into an APK with Gradle.
+7. Uploads the APK as a downloadable artifact (or Release).
 
-	// TODO: touch_mapper.go currently references *goro/input.Input, which
-	// doesn't exist. The real type is *goro/input.State (confirmed against
-	// actual upstream source), with SetTouch/SetKey/SetMouseButton methods
-	// that fit this exactly - deliberately left unwired this round to keep
-	// the test cycle focused. See the "Wire up real GRF file parsing" task
-	// in Asana for details.
-}
+You write code on your phone. GitHub builds it in the cloud. You install the APK
+on your phone. Full loop, zero PC.
