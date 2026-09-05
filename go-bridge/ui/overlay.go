@@ -126,13 +126,12 @@ func (o *Overlay) Draw(js JoystickState, buttonPressed bool) {
 	}
 	o.drawCircle(thumbCX, thumbCY, thumbRadius, 1, 1, 1, 0.6)
 
-	// Action button: fixed, bottom-right, brighter while pressed.
-	btnCX, btnCY := o.toNDC(0.85, 0.82)
-	alpha := float32(0.35)
-	if buttonPressed {
-		alpha = 0.7
-	}
-	o.drawCircle(btnCX, btnCY, buttonRadius, 0.9, 0.3, 0.2, alpha)
+	// Action button hidden for now - it isn't wired to anything, so a
+	// visible-but-dead button was just confusing. touch handling in
+	// main_android.go still tracks right-side taps; only the drawing is
+	// disabled. Re-enable this once it's wired into real input.
+	_ = buttonPressed
+	_ = buttonRadius
 }
 
 // toNDC converts a screen-space fraction (0..1, y-down, matching touch
