@@ -179,7 +179,7 @@ jobs:
             3. Uninstall any old version (Settings → Apps → Goro → Uninstall)
             4. Tap the APK to install
             
-            **Note:** Provide your own `data.grf`. Place in `/sdcard/Android/data/com.goro.android/files/`.
+            **Note:** Provide your own `data.grf`. Create a folder named `Ragnarok` at the top level of internal storage and place it there, then grant the app storage/"All files" permission in Android Settings.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -194,6 +194,6 @@ jobs:
           body: |
             Stable release #${{ github.run_number }}.
             Delete old APKs from Downloads before installing.
-            Place `data.grf` in `/sdcard/Android/data/com.goro.android/files/`.
+            Place `data.grf` in a `Ragnarok` folder at the top level of internal storage, then grant storage/"All files" permission in Android Settings.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
