@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/kivutar/goro-android-port/assets"
 	"github.com/kivutar/goro-android-port/debug"
@@ -126,6 +127,43 @@ func loadGRF() {
 	names := archive.Names()
 	for i := 0; i < len(names) && i < 5; i++ {
 		log.Printf("Goro: sample entry: %s", names[i])
+	}
+
+	scanForLoginAssets(names)
+}
+
+// scanForLoginAssets logs any GRF entries that look like the classic RO
+// login-screen art, so the *real* path in this specific GRF is known before
+// anything tries to load a texture from it. Not guessed at: goro targets the
+// pre-renewal 2008 client (see the client_date example in goro's own
+// goro.ini docs), where the login background traditionally lives at
+// data/texture/유저인터페이스/basic_interface/win_login.bmp - login_interface
+// only exists on client builds from ~2015 onward, and the exact filename
+// still varies by GRF vintage/repack. This just reports real matches from
+// archive.Names() (already a verified res.GRF method) rather than assuming
+// one specific path is present.
+func scanForLoginAssets(names []string) {
+	needles := []string{
+		"login_interface",
+		"basic_interface",
+		"win_login",
+		"유저인터페이스", // "user interface" - the texture folder that holds UI art
+	}
+	found := 0
+	for _, n := range names {
+		lower := strings.ToLower(n)
+		for _, needle := range needles {
+			if strings.Contains(lower, strings.ToLower(needle)) {
+				log.Printf("Goro: login-asset candidate: %s", n)
+				found++
+				break
+			}
+		}
+	}
+	if found == 0 {
+		log.Printf("Goro: no login-interface-looking entries found by name - " +
+			"this GRF's UI folder may use a different naming convention than " +
+			"the usual 유저인터페이스/basic_interface one")
 	}
 }
 
