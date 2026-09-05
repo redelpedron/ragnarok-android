@@ -30,7 +30,7 @@ import (
 // /sdcard/Android/data/<package>/, which most file managers can't reach on
 // Android 11+ without root or a special toggle. Users just create this
 // folder and drop data.grf (and rdata.grf) into it.
-const DefaultDataDir = "/storage/emulated/0/Ragnarok"
+const DefaultDataDir = "/storage/emulated/11/Ragnarok"
 
 // knownArchives mirrors the filenames res.Manager.scanKnownFiles() looks
 // for, so "this directory has game data" means the same thing here as it
