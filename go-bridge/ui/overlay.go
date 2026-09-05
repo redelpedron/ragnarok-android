@@ -134,6 +134,24 @@ func (o *Overlay) Draw(js JoystickState, buttonPressed bool) {
 	_ = buttonRadius
 }
 
+// DrawDebugToggle renders a small, always-visible dim circle in the
+// top-right corner as a discoverable tap target for toggling the debug
+// panel. Deliberately placed away from the joystick (bottom-left) and
+// action button (bottom-right) zones so it can't be confused with gameplay
+// controls. See main_android.go's onTouch for the matching hit zone.
+func (o *Overlay) DrawDebugToggle() {
+	if o.screenW == 0 || o.screenH == 0 {
+		return
+	}
+	glctx := o.glctx
+	glctx.Enable(gl.BLEND)
+	glctx.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	glctx.UseProgram(o.program)
+
+	cx, cy := o.toNDC(0.93, 0.06)
+	o.drawCircle(cx, cy, 0.035, 0.6, 0.6, 0.9, 0.35)
+}
+
 // toNDC converts a screen-space fraction (0..1, y-down, matching touch
 // events) into GL normalized device coordinates (-1..1, y-up).
 func (o *Overlay) toNDC(fx, fy float32) (x, y float32) {
