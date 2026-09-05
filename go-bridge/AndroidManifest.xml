@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.golang.todo.goro_android_port"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <!-- gomobile's auto-generated manifest declares no permissions at all,
+         which is why data.grf got "permission denied" even in the right
+         folder. These two cover it two ways since I can't confirm exactly
+         how storage permissions behave on your OS version:
+         1. Legacy broad read access (works on most versions for a
+            targetSdk 28 app once granted in Settings).
+         2. MANAGE_EXTERNAL_STORAGE as a fallback "All files access" toggle
+            if #1 isn't honored on your device's Android version. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <application android:label="Goro-Android" android:debuggable="true"
+        android:requestLegacyExternalStorage="true">
+        <activity android:name="org.golang.app.GoNativeActivity"
+            android:label="Goro-Android"
+            android:configChanges="orientation|keyboardHidden">
+            <meta-data android:name="android.app.lib_name" android:value="goro_android_port" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
